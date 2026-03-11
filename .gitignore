@@ -1,0 +1,17 @@
+# Virtual environment
+venv/
+
+# AWS credentials
+.env
+*.env
+credentials
+config
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Secrets
+secrets.json
+*.pem
+*.ppk
