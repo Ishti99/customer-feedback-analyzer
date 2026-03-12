@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Customer Feedback Analyzer - Serverless AWS Pipeline'
+
+Resources:
+
+  # S3 Bucket - stores uploaded feedback files
+  FeedbackBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'customer-feedback-${AWS::AccountId}'
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: '.csv'
+            Function: !GetAtt FeedbackAnalyzerFunction.Arn
+
+  # DynamoDB Table - stores analysis results
+  FeedbackTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: CustomerFeedback
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: customer_id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: customer_id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+
+  # IAM Role - gives Lambda permission to use S3, DynamoDB, and Bedrock
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: FeedbackAnalyzerRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: FeedbackAnalyzerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub 'arn:aws:s3:::customer-feedback-${AWS::AccountId}/*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt FeedbackTable.Arn
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+
+  # Lambda Function - analyzes feedback using Bedrock
+  FeedbackAnalyzerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: CustomerFeedbackAnalyzer
+      Runtime: python3.11
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: CustomerFeedback
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+            return {'statusCode': 200}
+
+  # Permission - allows S3 to trigger Lambda
+  LambdaS3Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FeedbackAnalyzerFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub 'arn:aws:s3:::customer-feedback-${AWS::AccountId}'
+
+Outputs:
+  BucketName:
+    Description: 'S3 Bucket Name'
+    Value: !Ref FeedbackBucket
+  TableName:
+    Description: 'DynamoDB Table Name'
+    Value: !Ref FeedbackTable
+  FunctionName:
+    Description: 'Lambda Function Name'
+    Value: !Ref FeedbackAnalyzerFunction
