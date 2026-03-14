@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Customer Feedback Analyzer - Serverless AWS Pipeline'
+Description: 'Customer feedback analysis pipeline for GSB 521 capstone'
 
 Resources:
 
