@@ -2,6 +2,7 @@ import json
 import boto3
 import csv
 import os
+import re
 from datetime import datetime
 
 # Initialize AWS clients
@@ -9,25 +10,25 @@ s3 = boto3.client('s3')
 bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
 dynamodb = boto3.resource('dynamodb')
 
-# DynamoDB table name from environment variable
 TABLE_NAME = os.environ.get('DYNAMODB_TABLE', 'CustomerFeedback')
 
 def analyze_feedback(feedback_text):
-    """Send feedback to Bedrock Meta Llama for analysis"""
-    
-    prompt = f"""Analyze this customer feedback and respond in JSON format only:
-{{
-    "sentiment": "Positive or Negative or Neutral",
-    "summary": "one sentence summary",
-    "category": "Product Quality or Customer Service or Shipping or Price or Other"
-}}
+    prompt = f"""<s>[INST] You are a JSON generator. Analyze the customer feedback below and return ONLY a valid JSON object with no explanation, no markdown, no extra text.
 
-Feedback: {feedback_text}"""
+Required JSON format:
+{{"sentiment": "Positive", "summary": "brief summary", "category": "Product Quality"}}
+
+Valid sentiment values: Positive, Negative, Neutral
+Valid category values: Product Quality, Customer Service, Shipping, Price, Other
+
+Customer feedback: {feedback_text}
+
+Return ONLY the JSON object: [/INST]"""
 
     body = json.dumps({
         "prompt": prompt,
-        "max_gen_len": 200,
-        "temperature": 0.1
+        "max_gen_len": 150,
+        "temperature": 0.01
     })
 
     response = bedrock.invoke_model(
@@ -38,27 +39,58 @@ Feedback: {feedback_text}"""
     result = json.loads(response['body'].read())
     response_text = result['generation'].strip()
     
-    # Extract JSON from response
-    start = response_text.find('{')
-    end = response_text.rfind('}') + 1
-    json_str = response_text[start:end]
+    print(f"Raw Bedrock response: {response_text}")
     
-    return json.loads(json_str)
+    # Try multiple JSON extraction methods
+    # Method 1: Direct parse
+    try:
+        return json.loads(response_text)
+    except:
+        pass
+    
+    # Method 2: Find first complete JSON object
+    try:
+        start = response_text.find('{')
+        end = response_text.rfind('}') + 1
+        if start != -1 and end > start:
+            json_str = response_text[start:end]
+            return json.loads(json_str)
+    except:
+        pass
+    
+    # Method 3: Use regex to extract JSON
+    try:
+        pattern = r'\{[^{}]*\}'
+        matches = re.findall(pattern, response_text)
+        if matches:
+            return json.loads(matches[0])
+    except:
+        pass
+    
+    # Fallback: manual sentiment detection
+    text_lower = feedback_text.lower()
+    if any(word in text_lower for word in ['excellent', 'great', 'love', 'amazing', 'perfect', 'outstanding']):
+        sentiment = 'Positive'
+    elif any(word in text_lower for word in ['terrible', 'broken', 'worst', 'disappointed', 'poor', 'bad']):
+        sentiment = 'Negative'
+    else:
+        sentiment = 'Neutral'
+        
+    return {
+        "sentiment": sentiment,
+        "summary": feedback_text[:50],
+        "category": "Other"
+    }
 
 def lambda_handler(event, context):
-    """Main Lambda function triggered by S3 upload"""
-    
-    # Get bucket and file info from S3 event
     bucket = event['Records'][0]['s3']['bucket']['name']
     key = event['Records'][0]['s3']['object']['key']
     
     print(f"Processing file: {key} from bucket: {bucket}")
     
-    # Download file from S3
     response = s3.get_object(Bucket=bucket, Key=key)
     content = response['Body'].read().decode('utf-8')
     
-    # Parse CSV
     table = dynamodb.Table(TABLE_NAME)
     reader = csv.DictReader(content.splitlines())
     
@@ -69,10 +101,16 @@ def lambda_handler(event, context):
         
         print(f"Analyzing feedback for customer: {customer_id}")
         
-        # Analyze with Bedrock
-        analysis = analyze_feedback(feedback)
+        try:
+            analysis = analyze_feedback(feedback)
+        except Exception as e:
+            print(f"Error analyzing feedback for {customer_id}: {str(e)}")
+            analysis = {
+                "sentiment": "Unknown",
+                "summary": "Error during analysis",
+                "category": "Other"
+            }
         
-        # Save to DynamoDB
         item = {
             'customer_id': customer_id,
             'timestamp': datetime.now().isoformat(),
