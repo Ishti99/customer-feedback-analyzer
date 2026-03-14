@@ -5,7 +5,6 @@ import os
 import re
 from datetime import datetime
 
-# Initialize AWS clients
 s3 = boto3.client('s3')
 bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
 dynamodb = boto3.resource('dynamodb')
@@ -13,17 +12,16 @@ dynamodb = boto3.resource('dynamodb')
 TABLE_NAME = os.environ.get('DYNAMODB_TABLE', 'CustomerFeedback')
 
 def analyze_feedback(feedback_text):
-    prompt = f"""<s>[INST] You are a JSON generator. Analyze the customer feedback below and return ONLY a valid JSON object with no explanation, no markdown, no extra text.
+    prompt = f"""Look at this customer feedback and return a JSON object only, nothing else.
 
-Required JSON format:
-{{"sentiment": "Positive", "summary": "brief summary", "category": "Product Quality"}}
+{{"sentiment": "Positive", "summary": "short summary here", "category": "Product Quality"}}
 
-Valid sentiment values: Positive, Negative, Neutral
-Valid category values: Product Quality, Customer Service, Shipping, Price, Other
+sentiment must be one of: Positive, Negative, Neutral
+category must be one of: Product Quality, Customer Service, Shipping, Price, Other
 
-Customer feedback: {feedback_text}
+feedback: {feedback_text}
 
-Return ONLY the JSON object: [/INST]"""
+JSON:"""
 
     body = json.dumps({
         "prompt": prompt,
@@ -39,39 +37,32 @@ Return ONLY the JSON object: [/INST]"""
     result = json.loads(response['body'].read())
     response_text = result['generation'].strip()
     
-    print(f"Raw Bedrock response: {response_text}")
+    print(f"Bedrock response: {response_text}")
     
-    # Try multiple JSON extraction methods
-    # Method 1: Direct parse
     try:
         return json.loads(response_text)
     except:
         pass
     
-    # Method 2: Find first complete JSON object
     try:
         start = response_text.find('{')
         end = response_text.rfind('}') + 1
         if start != -1 and end > start:
-            json_str = response_text[start:end]
-            return json.loads(json_str)
+            return json.loads(response_text[start:end])
     except:
         pass
     
-    # Method 3: Use regex to extract JSON
     try:
-        pattern = r'\{[^{}]*\}'
-        matches = re.findall(pattern, response_text)
+        matches = re.findall(r'\{[^{}]*\}', response_text)
         if matches:
             return json.loads(matches[0])
     except:
         pass
     
-    # Fallback: manual sentiment detection
     text_lower = feedback_text.lower()
-    if any(word in text_lower for word in ['excellent', 'great', 'love', 'amazing', 'perfect', 'outstanding']):
+    if any(w in text_lower for w in ['excellent', 'great', 'love', 'amazing', 'perfect', 'outstanding']):
         sentiment = 'Positive'
-    elif any(word in text_lower for word in ['terrible', 'broken', 'worst', 'disappointed', 'poor', 'bad']):
+    elif any(w in text_lower for w in ['terrible', 'broken', 'worst', 'disappointed', 'poor', 'bad']):
         sentiment = 'Negative'
     else:
         sentiment = 'Neutral'
@@ -86,7 +77,7 @@ def lambda_handler(event, context):
     bucket = event['Records'][0]['s3']['bucket']['name']
     key = event['Records'][0]['s3']['object']['key']
     
-    print(f"Processing file: {key} from bucket: {bucket}")
+    print(f"Got file: {key} from {bucket}")
     
     response = s3.get_object(Bucket=bucket, Key=key)
     content = response['Body'].read().decode('utf-8')
@@ -99,15 +90,15 @@ def lambda_handler(event, context):
         customer_id = row['customer_id']
         feedback = row['feedback']
         
-        print(f"Analyzing feedback for customer: {customer_id}")
+        print(f"Processing customer {customer_id}")
         
         try:
             analysis = analyze_feedback(feedback)
         except Exception as e:
-            print(f"Error analyzing feedback for {customer_id}: {str(e)}")
+            print(f"Error on {customer_id}: {str(e)}")
             analysis = {
                 "sentiment": "Unknown",
-                "summary": "Error during analysis",
+                "summary": "could not analyze",
                 "category": "Other"
             }
         
@@ -122,9 +113,9 @@ def lambda_handler(event, context):
         
         table.put_item(Item=item)
         results.append(item)
-        print(f"Saved result: {item}")
+        print(f"Saved: {item}")
     
     return {
         'statusCode': 200,
-        'body': json.dumps(f'Successfully analyzed {len(results)} feedback entries')
+        'body': json.dumps(f'processed {len(results)} entries')
     }
