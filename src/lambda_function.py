@@ -14,7 +14,7 @@ TABLE_NAME = os.environ.get('DYNAMODB_TABLE', 'CustomerFeedback')
 def analyze_feedback(feedback_text):
     prompt = f"""Look at this customer feedback and return a JSON object only, nothing else.
 
-{{"sentiment": "Positive", "summary": "short summary here", "category": "Product Quality"}}
+{{"sentiment": "Positive", "summary": "customer is happy with the product", "category": "Product Quality"}}
 
 sentiment must be one of: Positive, Negative, Neutral
 category must be one of: Product Quality, Customer Service, Shipping, Price, Other
